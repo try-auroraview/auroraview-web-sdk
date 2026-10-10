@@ -74,9 +74,14 @@
     "tauri-like"
   ],
   "license": "MIT",
+  "homepage": "https://github.com/try-auroraview/auroraview-web-sdk#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/try-auroraview/auroraview.git"
+    "url": "git+https://github.com/try-auroraview/auroraview-web-sdk.git",
+    "directory": "."
+  },
+  "bugs": {
+    "url": "https://github.com/try-auroraview/auroraview-web-sdk/issues"
   },
   "publishConfig": {
     "access": "public",

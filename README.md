@@ -1,9 +1,14 @@
 # @auroraview/sdk
 
 [![npm version](https://img.shields.io/npm/v/@auroraview/sdk.svg)](https://www.npmjs.com/package/@auroraview/sdk)
+[![CI](https://github.com/try-auroraview/auroraview-web-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/try-auroraview/auroraview-web-sdk/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Framework-agnostic SDK for AuroraView WebView bridge. Provides type-safe APIs for communication between JavaScript and Python in AuroraView applications.
+
+This is the **web (TypeScript) SDK** only. It is maintained as a standalone repository so it can version, test and release independently of the AuroraView core. The Rust core and the Python host API live in [`try-auroraview/auroraview`](https://github.com/try-auroraview/auroraview).
+
+> **Migrated from** `try-auroraview/auroraview` at `packages/auroraview-sdk` (v0.5.13). The full commit history of that subtree is preserved here.
 
 ## Features
 
@@ -305,12 +310,40 @@ The SDK is designed to work within AuroraView's WebView environment. It requires
 - ES2020+ support
 - `window.auroraview` bridge object (injected by AuroraView runtime)
 
+## Development
+
+Commands run through [`vx`](https://github.com/loonghao/vx) so the toolchain is pinned for every contributor.
+
+```bash
+just              # list recipes
+just install      # bun install
+just typecheck    # tsc --noEmit
+just test         # vitest
+just test-cov     # vitest with coverage thresholds
+just build        # dist/ (npm package)
+just build-assets # assets/ (inject scripts consumed by the Rust core)
+just test-e2e     # playwright
+just ci           # typecheck + test + build-assets
+```
+
+`just build-assets` produces `assets/core`, `assets/plugins` and `assets/extensions`. Those scripts are embedded into the Rust binary by `auroraview-core` / `auroraview-extensions`; each release attaches them as `sdk-assets-v<version>.tar.gz` and the core repo vendors a pinned copy via its `sync-sdk-assets` workflow.
+
+## Releasing
+
+Releases are fully automated by [release-please](https://github.com/googleapis/release-please):
+
+1. Land [conventional commits](https://www.conventionalcommits.org/) on `main`.
+2. release-please opens/updates a release PR with the changelog and version bump.
+3. Merging it tags `v<version>`, runs the full CI suite, publishes `@auroraview/sdk` to npm via OIDC trusted publishing, and attaches the inject assets to the GitHub release.
+
+No `NPM_TOKEN` is required — authentication uses GitHub's OIDC token. A one-time trusted-publisher entry must exist on npm for `try-auroraview/auroraview-web-sdk` + `release.yml` + environment `npm`.
+
 ## License
 
-MIT © [AuroraView Contributors](https://github.com/try-auroraview/auroraview)
+MIT © [AuroraView Contributors](https://github.com/try-auroraview/auroraview-web-sdk)
 
 ## Links
 
 - [Documentation](https://try-auroraview.github.io/auroraview/)
-- [GitHub Repository](https://github.com/try-auroraview/auroraview)
-- [Issue Tracker](https://github.com/try-auroraview/auroraview/issues)
+- [AuroraView core (Rust + Python)](https://github.com/try-auroraview/auroraview)
+- [Issue Tracker](https://github.com/try-auroraview/auroraview-web-sdk/issues)

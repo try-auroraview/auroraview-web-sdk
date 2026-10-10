@@ -1,0 +1,278 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      artifact-prefix:
+        description: "Prefix for artifact names to avoid conflicts"
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  VX_VERSION: '0.9.33'
+
+jobs:
+  typecheck:
+    name: Type Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup vx helpers
+        uses: loonghao/vx@vx-v0.9.33
+        with:
+          version: ${{ env.VX_VERSION }}
+          github-token: ${{ github.token }}
+          tools: 'just bun'
+          cache: 'false'
+
+      - run: vx just typecheck
+
+  unit-tests:
+    name: Unit Tests (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # Node 18 is past upstream LTS and trips up vitest 4 (hook timeouts in
+        # this suite); support the active LTS branches only.
+        node-version: ['20', '22', '24']
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Setup vx helpers
+        uses: loonghao/vx@vx-v0.9.33
+        with:
+          version: ${{ env.VX_VERSION }}
+          github-token: ${{ github.token }}
+          tools: 'bun'
+          cache: 'false'
+
+      - name: Install dependencies
+        run: vx bun install
+
+      - name: Run unit tests
+        run: vx bun run test
+
+  coverage:
+    name: Coverage Report
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup vx helpers
+        uses: loonghao/vx@vx-v0.9.33
+        with:
+          version: ${{ env.VX_VERSION }}
+          github-token: ${{ github.token }}
+          tools: 'just bun'
+          cache: 'false'
+
+      - name: Run tests with coverage
+        run: vx just test-cov
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v6
+        with:
+          files: coverage/coverage-final.json
+          flags: sdk,typescript
+          name: sdk-coverage
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact-prefix }}sdk-coverage-report
+          path: coverage/
+          retention-days: 7
+
+  build-package:
+    name: Build Package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [typecheck]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup vx helpers
+        uses: loonghao/vx@vx-v0.9.33
+        with:
+          version: ${{ env.VX_VERSION }}
+          github-token: ${{ github.token }}
+          tools: 'just bun node@22 npm'
+          cache: 'false'
+
+      - name: Build SDK
+        run: vx just build
+
+      - name: Test installed npm archive in a real consumer
+        run: vx just check-package
+
+      - name: Verify build outputs
+        run: |
+          ls -la dist/
+          for file in index.js index.cjs index.d.ts react.js vue.js inject/event_bridge.js; do
+            test -f "dist/$file" || { echo "Missing dist/$file"; exit 1; }
+          done
+          echo "All SDK package outputs verified!"
+
+      - name: Upload npm archive and consumer receipt
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact-prefix }}sdk-npm-consumer
+          path: package-artifacts/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Upload SDK package artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact-prefix }}sdk-package
+          path: dist/
+          retention-days: 7
+
+  # Inject scripts that the AuroraView Rust core embeds via rust-embed.
+  # The core repo vendors these through its sync-sdk-assets workflow.
+  build-assets:
+    name: Build Assets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [typecheck]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup vx helpers
+        uses: loonghao/vx@vx-v0.9.33
+        with:
+          version: ${{ env.VX_VERSION }}
+          github-token: ${{ github.token }}
+          tools: 'just bun'
+          cache: 'false'
+
+      - name: Build assets
+        run: vx just build-assets
+
+      - name: Verify assets outputs
+        run: |
+          ls -R assets/
+          for file in \
+            core/event_bridge.js core/state_bridge.js core/bridge_stub.js \
+            plugins/fs.js plugins/dialog.js plugins/clipboard.js plugins/shell.js \
+            extensions/chrome_polyfill.js; do
+            test -f "assets/$file" || { echo "Missing assets/$file"; exit 1; }
+          done
+          echo "All SDK assets verified!"
+
+      - name: Upload SDK assets artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact-prefix }}sdk-assets
+          path: assets/
+          retention-days: 30
+
+  e2e-tests:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [build-package]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup vx helpers
+        uses: loonghao/vx@vx-v0.9.33
+        with:
+          version: ${{ env.VX_VERSION }}
+          github-token: ${{ github.token }}
+          tools: 'just bun'
+          cache: 'false'
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact-prefix }}sdk-package
+          path: dist/
+
+      - name: Install dependencies
+        run: vx bun install
+
+      - name: Link SDK dist into E2E test-app
+        run: |
+          # npx serve may not follow symlinks reliably in CI, so use a real copy.
+          rm -rf tests/e2e/test-app/dist
+          cp -r dist tests/e2e/test-app/dist
+          test -f tests/e2e/test-app/dist/index.js || { echo "index.js not found in test-app/dist/"; exit 1; }
+
+      - name: Configure bounded apt downloads
+        run: bash scripts/ci/configure_apt.sh
+
+      - name: Install Playwright
+        run: vx bun run playwright install chromium --with-deps
+
+      - name: Run E2E tests
+        run: vx bun run test:e2e
+
+      - name: Upload E2E test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.artifact-prefix }}sdk-e2e-results
+          path: test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  ci-ready:
+    name: CI Ready
+    runs-on: ubuntu-latest
+    needs: [typecheck, unit-tests, coverage, build-package, build-assets, e2e-tests]
+    if: always() && !cancelled()
+    steps:
+      - name: Check results
+        run: |
+          echo "## CI Results" >> $GITHUB_STEP_SUMMARY
+
+          failed=0
+          while IFS='|' read -r job result; do
+            case "$result" in
+              success) echo "- OK $job" >> $GITHUB_STEP_SUMMARY ;;
+              skipped) echo "- SKIP $job" >> $GITHUB_STEP_SUMMARY ;;
+              cancelled) echo "- WARN $job (cancelled)" >> $GITHUB_STEP_SUMMARY ;;
+              *) echo "- FAIL $job ($result)" >> $GITHUB_STEP_SUMMARY; failed=1 ;;
+            esac
+          done <<'EOF'
+          typecheck|${{ needs.typecheck.result }}
+          unit-tests|${{ needs.unit-tests.result }}
+          coverage|${{ needs.coverage.result }}
+          build-package|${{ needs.build-package.result }}
+          build-assets|${{ needs.build-assets.result }}
+          e2e-tests|${{ needs.e2e-tests.result }}
+          EOF
+
+          if [ "$failed" -eq 1 ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "CI failed" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "CI passed!" >> $GITHUB_STEP_SUMMARY

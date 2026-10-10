@@ -188,8 +188,8 @@ function pack() {
   let consumer;
   try {
     receipt.stage = 'build-check';
-    const repository = realpathSync(path.resolve(path.dirname(script), '../../..'));
-    const packageRoot = path.join(repository, 'packages/auroraview-sdk');
+    const repository = realpathSync(path.resolve(path.dirname(script), '..'));
+    const packageRoot = repository;
     assert(existsSync(path.join(packageRoot, 'dist/inject/event_bridge.js')), 'Build SDK first');
     receipt.stage = 'pack';
     const packed = JSON.parse(run(['npm', 'pack', '--ignore-scripts', '--json',

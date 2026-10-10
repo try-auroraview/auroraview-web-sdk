@@ -3,8 +3,12 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const coreAssetsDir = path.resolve(__dirname, '../../crates/auroraview-core/src/assets/js');
-const extensionsAssetsDir = path.resolve(__dirname, '../../crates/auroraview-extensions/src/assets/js');
+// Standalone repo: inject scripts are built into `assets/` at the repo root and
+// shipped as a CI artifact plus a release tarball. The AuroraView core repo
+// vendors them into `crates/auroraview-core/src/assets/js/` via the
+// `sync-sdk-assets` workflow, so no cross-repo path is baked in here.
+const coreAssetsDir = path.resolve(__dirname, 'assets');
+const extensionsAssetsDir = path.resolve(__dirname, 'assets/extensions');
 
 const commonOptions: Partial<Options> = {
   format: ['iife'],

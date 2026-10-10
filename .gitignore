@@ -1,1 +1,37 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+assets/
+
+# Test and coverage output
+coverage/
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+
+# Packaging scratch
 /package-artifacts/
+*.tgz
+
+# Local environment
+.env
+.env.local
+.env.*.local
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*~
+*.log
+
+# AI assistant mirrors — canonical skills live in the auroraview core repo
+.claude/skills/
+.cursor/skills/
+.codex/skills/
+.augment/skills/

@@ -1,0 +1,14 @@
+# Normalize line endings on checkin; the repo is always checked out with LF so
+# that shell scripts and fixtures behave identically on Linux CI and Windows.
+* text=auto eol=lf
+
+# Binary assets must never be normalized.
+*.png binary
+*.ico binary
+*.jpg binary
+*.gif binary
+*.woff binary
+*.woff2 binary
+
+# Lockfiles are generated; keep them out of diffs and language stats.
+bun.lock linguist-generated=true

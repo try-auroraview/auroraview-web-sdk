@@ -1,0 +1,233 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  # Required for npm OIDC trusted publishing.
+  id-token: write
+
+env:
+  VX_VERSION: '0.9.33'
+
+jobs:
+  release-please:
+    name: Release Please
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.major }}.${{ steps.release.outputs.minor }}.${{ steps.release.outputs.patch }}
+    steps:
+      - uses: googleapis/release-please-action@v5
+        id: release
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # Re-run the full CI suite against the release commit before anything ships.
+  verify:
+    name: Verify
+    needs: [release-please]
+    if: needs.release-please.outputs.release_created == 'true'
+    uses: ./.github/workflows/ci.yml
+    with:
+      artifact-prefix: 'release-'
+
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    needs: [release-please, verify]
+    if: needs.release-please.outputs.release_created == 'true'
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/@auroraview/sdk
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+
+      - name: Install npm trusted publishing CLI
+        run: npm install -g npm@11
+
+      - name: Verify npm trusted publishing toolchain
+        run: |
+          node --version
+          npm --version
+          node <<'NODE'
+          const { execFileSync } = require("node:child_process");
+          const parse = (v) => v.split(".").map(Number);
+          const atLeast = (a, b) => {
+            for (let i = 0; i < b.length; i += 1) {
+              const left = a[i] || 0;
+              if (left > b[i]) return true;
+              if (left < b[i]) return false;
+            }
+            return true;
+          };
+          const npmVersion = execFileSync("npm", ["--version"], { encoding: "utf8" }).trim();
+          if (!atLeast(parse(process.versions.node), [22, 14, 0])) {
+            throw new Error(`npm trusted publishing requires Node >= 22.14.0; found ${process.versions.node}`);
+          }
+          if (!atLeast(parse(npmVersion), [11, 5, 1])) {
+            throw new Error(`npm trusted publishing requires npm >= 11.5.1; found ${npmVersion}`);
+          }
+          NODE
+
+      - name: Verify package metadata matches the release tag
+        env:
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          node <<'NODE'
+          const assert = require('node:assert/strict');
+          const { readFileSync } = require('node:fs');
+          const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+          assert.equal(pkg.name, '@auroraview/sdk', 'Unexpected package name');
+          assert.equal(process.env.RELEASE_TAG, `v${pkg.version}`, 'Release tag and package version differ');
+          assert.equal(
+            pkg.repository?.url,
+            `git+https://github.com/${process.env.GITHUB_REPOSITORY}.git`,
+            'package.json repository differs from the publishing repository',
+          );
+          console.log(`Verified ${pkg.name}@${pkg.version} for tag ${process.env.RELEASE_TAG}`);
+          NODE
+
+      - name: Download verified npm archive
+        uses: actions/download-artifact@v8
+        with:
+          name: release-sdk-npm-consumer
+          path: npm-artifacts/
+
+      - name: Verify archive against the consumer receipt
+        id: archive
+        run: |
+          node <<'NODE'
+          const assert = require('node:assert/strict');
+          const { execFileSync } = require('node:child_process');
+          const { createHash } = require('node:crypto');
+          const { appendFileSync, lstatSync, readFileSync, realpathSync } = require('node:fs');
+          const path = require('node:path');
+
+          const expected = JSON.parse(readFileSync('package.json', 'utf8'));
+          const directory = realpathSync('npm-artifacts');
+          const receipt = JSON.parse(readFileSync(path.join(directory, 'sdk-package-receipt.json'), 'utf8'));
+          assert.equal(receipt.status, 'passed', 'Consumer validation did not pass');
+          assert.equal(receipt.stage, 'complete', 'Consumer validation did not complete');
+          assert.equal(receipt.consumer?.version, expected.version, 'Receipt version differs');
+
+          const filename = receipt.tarball?.filename;
+          assert.ok(typeof filename === 'string' && filename === path.basename(filename),
+            'Archive filename must be a contained basename');
+          const archive = path.join(directory, filename);
+          assert.equal(path.dirname(realpathSync(archive)), directory, 'Archive escapes the artifact directory');
+          const bytes = readFileSync(archive);
+          assert.equal(bytes.length, receipt.tarball.size, 'Archive size differs from receipt');
+          const integrity = `sha512-${createHash('sha512').update(bytes).digest('base64')}`;
+          assert.equal(receipt.tarball.integrity, integrity, 'Archive integrity differs from receipt');
+
+          const metadata = JSON.parse(execFileSync('tar', ['-xOf', archive, 'package/package.json'], {
+            encoding: 'utf8', timeout: 10000, maxBuffer: 1024 * 1024,
+          }));
+          assert.equal(metadata.version, expected.version, 'Packed version differs');
+          appendFileSync(process.env.GITHUB_OUTPUT, `path=${archive}\nversion=${expected.version}\nintegrity=${integrity}\n`);
+          console.log(`Verified ${filename}`);
+          NODE
+
+      - name: Publish to npm (OIDC Trusted Publishing)
+        id: npm-publish
+        env:
+          VERIFIED_ARCHIVE: ${{ steps.archive.outputs.path }}
+          SDK_VERSION: ${{ steps.archive.outputs.version }}
+          VERIFIED_INTEGRITY: ${{ steps.archive.outputs.integrity }}
+        run: |
+          VERSION="$SDK_VERSION"
+          echo "Publishing @auroraview/sdk@$VERSION via OIDC trusted publishing..."
+
+          if EXISTING_DIST=$(npm view "@auroraview/sdk@$VERSION" dist --json --registry https://registry.npmjs.org 2>/dev/null); then
+            EXISTING_DIST="$EXISTING_DIST" node --input-type=commonjs <<'NODE'
+          const assert = require('node:assert/strict');
+          assert.equal(
+            JSON.parse(process.env.EXISTING_DIST).integrity,
+            process.env.VERIFIED_INTEGRITY,
+            'Immutable npm version conflicts with the verified archive',
+          );
+          NODE
+            echo "Version $VERSION already published with the verified archive integrity, skipping"
+            echo "publish_result=skipped" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          publish_log=$(mktemp)
+          set +e
+          npm publish "$VERIFIED_ARCHIVE" --registry https://registry.npmjs.org --provenance --access public --ignore-scripts 2>&1 | tee "$publish_log"
+          publish_status=${PIPESTATUS[0]}
+          set -e
+
+          if [ "$publish_status" -eq 0 ]; then
+            echo "publish_result=success" >> "$GITHUB_OUTPUT"
+            echo "Published @auroraview/sdk@$VERSION via OIDC trusted publishing"
+            exit 0
+          fi
+
+          echo "publish_result=failed" >> "$GITHUB_OUTPUT"
+          echo ""
+          echo "========== npm publish FAILED (exit code $publish_status) =========="
+          echo ""
+          if grep -Eiq 'trusted publishing|trusted publisher|not linked' "$publish_log"; then
+            echo "ERROR: Trusted publishing is not configured for this npm package/repository pair."
+            echo ""
+            echo "TO FIX — add this repository as a trusted publisher on npm:"
+            echo "  1. Go to https://www.npmjs.com/package/@auroraview/sdk/access"
+            echo "  2. Click 'Trusted Publishers' -> 'Add Trusted Publisher'"
+            echo "  3. Set: Owner=try-auroraview, Repository=auroraview-web-sdk,"
+            echo "     Workflow filename=release.yml, Environment=npm"
+            echo ""
+          fi
+          exit "$publish_status"
+
+  # Inject scripts the AuroraView Rust core embeds. Attach them to the release so
+  # the core repo can vendor a pinned, integrity-checked set via sync-sdk-assets.
+  release-assets:
+    name: Attach Inject Assets
+    runs-on: ubuntu-latest
+    needs: [release-please, publish]
+    if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-sdk-assets
+          path: assets/
+
+      - name: Package and verify assets
+        env:
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
+          SDK_VERSION: ${{ needs.release-please.outputs.version }}
+        run: |
+          for file in \
+            core/event_bridge.js core/state_bridge.js core/bridge_stub.js \
+            plugins/fs.js plugins/dialog.js plugins/clipboard.js plugins/shell.js \
+            extensions/chrome_polyfill.js; do
+            test -f "assets/$file" || { echo "Missing assets/$file"; exit 1; }
+          done
+          archive="sdk-assets-v${SDK_VERSION}.tar.gz"
+          tar -czf "$archive" -C assets .
+          sha256sum "$archive" | tee "$archive.sha256"
+          echo "archive=$archive" >> "$GITHUB_ENV"
+
+      - name: Upload assets to the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: gh release upload "$RELEASE_TAG" "$archive" "$archive.sha256" --clobber
