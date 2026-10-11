@@ -198,6 +198,12 @@ jobs:
             echo "  3. Set: Owner=try-auroraview, Repository=auroraview-web-sdk,"
             echo "     Workflow filename=release.yml, Environment=npm"
             echo ""
+            echo "Claims this job presented to npm (compare them field by field):"
+            echo "  repository:       ${{ github.repository }}"
+            echo "  workflow:         ${{ github.workflow }} (file: release.yml)"
+            echo "  environment:      npm"
+            echo "  ref:              ${{ github.ref }}"
+            echo ""
           fi
           exit "$publish_status"
 
