@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.16](https://github.com/try-auroraview/auroraview-web-sdk/compare/sdk-v0.5.15...sdk-v0.5.16) (2026-10-11)
+
+
+### Bug Fixes
+
+* **ci:** put the release asset upload on one line ([767e39a](https://github.com/try-auroraview/auroraview-web-sdk/commit/767e39ae3d258835f4dfa7229d986dcdd29ce18a))
+
 ## [0.5.15](https://github.com/try-auroraview/auroraview-web-sdk/compare/sdk-v0.5.14...sdk-v0.5.15) (2026-10-11)
 
 
