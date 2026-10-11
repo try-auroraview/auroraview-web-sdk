@@ -93,7 +93,13 @@ jobs:
           const { readFileSync } = require('node:fs');
           const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
           assert.equal(pkg.name, '@auroraview/sdk', 'Unexpected package name');
-          assert.equal(process.env.RELEASE_TAG, `v${pkg.version}`, 'Release tag and package version differ');
+          // release-please derives the `sdk` component from the package name, so the
+          // tag is `sdk-v<version>`; accept a plain `v<version>` too.
+          assert.equal(
+            process.env.RELEASE_TAG.replace(/^.*?v(?=\d)/, ''),
+            pkg.version,
+            'Release tag and package version differ',
+          );
           assert.equal(
             pkg.repository?.url,
             `git+https://github.com/${process.env.GITHUB_REPOSITORY}.git`,
