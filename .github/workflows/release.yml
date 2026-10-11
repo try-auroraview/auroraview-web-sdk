@@ -197,10 +197,12 @@ jobs:
 
   # Inject scripts the AuroraView Rust core embeds. Attach them to the release so
   # the core repo can vendor a pinned, integrity-checked set via sync-sdk-assets.
+  # Deliberately independent of `publish`: the core repo depends on these assets,
+  # so a missing npm trusted publisher must not hold them back.
   release-assets:
     name: Attach Inject Assets
     runs-on: ubuntu-latest
-    needs: [release-please, publish]
+    needs: [release-please, verify]
     if: needs.release-please.outputs.release_created == 'true'
     permissions:
       contents: write
